@@ -4,7 +4,9 @@
 #include <openssl/rand.h>
 #include <openssl/bn.h>
 
-#define CATCH_CONFIG_MAIN  
+#include <byteswap.h>
+#include <string.h>
+
 #include <tests/catch.hpp>
 
 TEST_CASE( "verify", "zkp") {
@@ -264,7 +266,7 @@ TEST_CASE( "ed25519_algebra_add_points", "zkp") {
         status = ed25519_algebra_add_points(ctx, &res, &pa, &pb);
         REQUIRE(status == ELLIPTIC_CURVE_ALGEBRA_SUCCESS);
 
-        uint32_t val = __bswap_32(__bswap_32(a)+__bswap_32(b)); // sum in big endian
+        uint32_t val = bswap_32(bswap_32(a)+bswap_32(b)); // sum in big endian
         status = ed25519_algebra_generator_mul_data(ctx, (uint8_t*)&val, sizeof(val), &sum);
         REQUIRE(status == ELLIPTIC_CURVE_ALGEBRA_SUCCESS);
 
@@ -284,7 +286,7 @@ TEST_CASE( "ed25519_algebra_add_points", "zkp") {
         REQUIRE(status == ELLIPTIC_CURVE_ALGEBRA_SUCCESS);
         REQUIRE(memcmp(pa, res, sizeof(ed25519_point_t)) == 0);
 
-        uint32_t val = __bswap_32(__bswap_32(a)+__bswap_32(b)); // sum in big endian
+        uint32_t val = bswap_32(bswap_32(a)+bswap_32(b)); // sum in big endian
         status = ed25519_algebra_generator_mul_data(ctx, (uint8_t*)&val, sizeof(val), &sum);
         REQUIRE(status == ELLIPTIC_CURVE_ALGEBRA_SUCCESS);
 

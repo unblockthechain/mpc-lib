@@ -437,7 +437,7 @@ zero_knowledge_proof_status range_proof_exponent_zkpok_verify(const ring_pederse
         goto cleanup;
     }
 
-    if (!is_coprime_fast(zkpok.D, paillier->n, ctx))
+    if (is_coprime_fast(zkpok.D, paillier->n, ctx) != 1)
     {
         status = ZKP_VERIFICATION_FAILED;
         goto cleanup;
@@ -447,7 +447,7 @@ zero_knowledge_proof_status range_proof_exponent_zkpok_verify(const ring_pederse
         status = ZKP_OUT_OF_MEMORY;
         goto cleanup;
     }
-    if (!is_coprime_fast(tmp1, paillier->n, ctx))
+    if (is_coprime_fast(tmp1, paillier->n, ctx) != 1)
     {
         status = ZKP_VERIFICATION_FAILED;
         goto cleanup;
@@ -585,7 +585,7 @@ zero_knowledge_proof_status range_proof_exponent_zkpok_batch_verify(const ring_p
             goto cleanup;
         }
 
-        if (!is_coprime_fast(zkpok.D, paillier->n, ctx))
+        if (is_coprime_fast(zkpok.D, paillier->n, ctx) != 1)
         {
             status = ZKP_VERIFICATION_FAILED;
             goto cleanup;
@@ -595,7 +595,7 @@ zero_knowledge_proof_status range_proof_exponent_zkpok_batch_verify(const ring_p
             status = ZKP_OUT_OF_MEMORY;
             goto cleanup;
         }
-        if (!is_coprime_fast(tmp1, paillier->n, ctx))
+        if (is_coprime_fast(tmp1, paillier->n, ctx) != 1)
         {
             status = ZKP_VERIFICATION_FAILED;
             goto cleanup;
@@ -994,7 +994,7 @@ zero_knowledge_proof_status range_proof_diffie_hellman_zkpok_verify(const ring_p
         goto cleanup;
     }
 
-    if (!is_coprime_fast(zkpok.base.D, paillier->n, ctx))
+    if (is_coprime_fast(zkpok.base.D, paillier->n, ctx) != 1)
     {
         status = ZKP_VERIFICATION_FAILED;
         goto cleanup;
@@ -1012,7 +1012,7 @@ zero_knowledge_proof_status range_proof_diffie_hellman_zkpok_verify(const ring_p
         status = ZKP_OUT_OF_MEMORY;
         goto cleanup;
     }
-    if (!is_coprime_fast(tmp1, paillier->n, ctx))
+    if (is_coprime_fast(tmp1, paillier->n, ctx) != 1)
     {
         status = ZKP_VERIFICATION_FAILED;
         goto cleanup;
@@ -1170,7 +1170,7 @@ static inline uint8_t* serialize_paillier_large_factors_zkp(const range_proof_pa
     BN_bn2binpad(proof->w1, ptr, w_size);
     ptr += w_size;
     BN_bn2binpad(proof->w2, ptr, w_size);
-    ptr += z_size;
+    ptr += w_size;
     BN_bn2binpad(proof->v, ptr, v_size);
     ptr += v_size;
     return ptr;
@@ -1385,7 +1385,7 @@ zero_knowledge_proof_status range_proof_paillier_large_factors_zkp_generate(cons
         goto cleanup;
 
     status = serialize_paillier_large_factors_zkp(&zkp, ring_pedersen->n, priv->pub.n, serialized_proof) ? ZKP_SUCCESS : ZKP_INVALID_PARAMETER;
-
+    
 cleanup:
     BN_CTX_end(ctx);
     BN_CTX_free(ctx);
@@ -1404,11 +1404,11 @@ zero_knowledge_proof_status range_proof_paillier_large_factors_zkp_verify(const 
 
     if (!pub || !ring_pedersen || (!aad && aad_len) || !serialized_proof || !proof_len)
         return ZKP_INVALID_PARAMETER;
-
+    
     needed_len = paillier_large_factors_zkp_serialized_size(&ring_pedersen->pub, pub);
     if (proof_len < needed_len)
         return ZKP_INVALID_PARAMETER;
-
+    
     ctx = BN_CTX_new();
 
     if (!ctx)
@@ -1434,19 +1434,19 @@ zero_knowledge_proof_status range_proof_paillier_large_factors_zkp_verify(const 
         status = ZKP_VERIFICATION_FAILED;
         goto cleanup;
     }
-
+    
     // sample e
     if (!genarate_paillier_large_factors_zkp_seed(&zkp, pub, aad, aad_len, e_val))
     {
         status = ZKP_UNKNOWN_ERROR;
         goto cleanup;
     }
-    if (!BN_bin2bn(e_val, sizeof(elliptic_curve256_scalar_t), e))
+        if (!BN_bin2bn(e_val, sizeof(elliptic_curve256_scalar_t), e))
             goto cleanup;
-
+    
     if (RING_PEDERSEN_SUCCESS != ring_pedersen_create_commitment_internal(&ring_pedersen->pub, pub->n, zkp.lambda, R, ctx))
         goto cleanup;
-
+    
     if (RING_PEDERSEN_SUCCESS != ring_pedersen_create_commitment_internal(&ring_pedersen->pub, zkp.z1, zkp.w1, tmp1, ctx))
         goto cleanup;
     if (!BN_mod_exp(tmp2, zkp.P, e, ring_pedersen->pub.n, ctx) || !BN_mod_mul(tmp2, tmp2, zkp.A, ring_pedersen->pub.n, ctx))

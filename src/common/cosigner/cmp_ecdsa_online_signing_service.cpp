@@ -8,6 +8,8 @@
 #include "utils.h"
 #include "logging/logging_t.h"
 
+#include <inttypes.h>
+
 namespace fireblocks
 {
 namespace common
@@ -34,15 +36,6 @@ static inline std::string HexStr(const T itbegin, const T itend)
 }
 #endif
 
-extern "C" int gettimeofday(struct timeval *tv, struct timezone *tz);
-
-static inline uint64_t clock()
-{
-    timeval tv;
-	gettimeofday(&tv, NULL);
-    return (uint64_t)tv.tv_sec * 1000 + (uint64_t)tv.tv_usec / 1000;
-}
-
 static inline const char* to_string(cosigner_sign_algorithm algorithm)
 {
     switch (algorithm)
@@ -55,6 +48,12 @@ static inline const char* to_string(cosigner_sign_algorithm algorithm)
         return "UNKNOWN";
     }
 }
+
+cmp_ecdsa_online_signing_service::cmp_ecdsa_online_signing_service(platform_service& service, const cmp_key_persistency& key_persistency, signing_persistency& persistency):
+    cmp_ecdsa_signing_service(service, key_persistency),
+    _signing_persistency(persistency),
+    _timing_map(service) {}
+
 
 void cmp_ecdsa_online_signing_service::start_signing(const std::string& key_id, const std::string& txid, cosigner_sign_algorithm algorithm, const signing_data& data, const std::string& metadata_json, const std::set<std::string>& players, const std::set<uint64_t>& players_ids, std::vector<cmp_mta_request>& mta_requests)
 {
@@ -78,7 +77,7 @@ void cmp_ecdsa_online_signing_service::start_signing(const std::string& key_id, 
     {
         if (metadata.players_info.find(*i) == metadata.players_info.end())
         {
-            LOG_ERROR("playerid %lu not part of key, for keyid = %s, txid = %s", *i, key_id.c_str(), txid.c_str());
+            LOG_ERROR("playerid %" PRIu64 " not part of key, for keyid = %s, txid = %s", *i, key_id.c_str(), txid.c_str());
             throw cosigner_exception(cosigner_exception::INVALID_PARAMETERS);
         }
     }
@@ -102,15 +101,13 @@ void cmp_ecdsa_online_signing_service::start_signing(const std::string& key_id, 
     _service.start_signing(key_id, txid, data, metadata_json, players);
 
 #ifdef MOBILE
-    {
-        std::lock_guard<std::mutex> lg(_timing_map_lock);
-        _timing_map[txid] = clock();
-    }
+    _timing_map.insert(txid);
 #endif
 
     LOG_INFO("Starting signing process keyid = %s, txid = %s", key_id.c_str(), txid.c_str());
     cmp_signing_metadata info = {key_id};
     memcpy(info.chaincode, data.chaincode, sizeof(HDChaincode));
+    memset(info.ack, 0, sizeof(commitments_sha256_t));
     info.signers_ids.insert(players_ids.begin(), players_ids.end());
     info.version = common::cosigner::MPC_PROTOCOL_VERSION;
 
@@ -154,11 +151,15 @@ uint64_t cmp_ecdsa_online_signing_service::mta_response(const std::string& txid,
         throw cosigner_exception(cosigner_exception::INVALID_PARAMETERS);
     }
 
-#ifndef MOBILE
+    static const commitments_sha256_t ZERO = {0};
+    if (memcmp(metadata.ack, ZERO, sizeof(commitments_sha256_t)) != 0)
     {
-        std::lock_guard<std::mutex> lg(_timing_map_lock);
-        _timing_map[txid] = clock();
+        LOG_ERROR("Can't change mta message ack");
+        throw cosigner_exception(cosigner_exception::INTERNAL_ERROR);
     }
+
+#ifndef MOBILE
+    _timing_map.insert(txid);
 #endif
 
     ack_mta_request(metadata.sig_data.size(), requests, metadata.signers_ids, metadata.ack);
@@ -182,7 +183,7 @@ uint64_t cmp_ecdsa_online_signing_service::mta_response(const std::string& txid,
             auto my_proof = req_it->second[i].mta_proofs.find(my_id);
             if (my_proof == req_it->second[i].mta_proofs.end())
             {
-                LOG_ERROR("Player %lu didn't send k rddh proof to me in block %lu", req_it->first, i);
+                LOG_ERROR("Player %" PRIu64 " didn't send k rddh proof to me in block %lu", req_it->first, i);
                 throw cosigner_exception(cosigner_exception::INVALID_PARAMETERS);
             }
             paillier_with_range_proof_t proof = {(uint8_t*)req_it->second[i].mta.message.data(), (uint32_t)req_it->second[i].mta.message.size(), (uint8_t*)my_proof->second.data(), (uint32_t)my_proof->second.size()};
@@ -190,7 +191,7 @@ uint64_t cmp_ecdsa_online_signing_service::mta_response(const std::string& txid,
                 &req_it->second[i].Z.data, &req_it->second[i].A.data, &req_it->second[i].B.data, &proof);
             if (status != ZKP_SUCCESS)
             {
-                LOG_ERROR("Failed to verify k rddh proof from player %lu block %lu, error %d", req_it->first, i, status);
+                LOG_ERROR("Failed to verify k rddh proof from player %" PRIu64 " block %lu, error %d", req_it->first, i, status);
                 throw_cosigner_exception(status);
             }
         }
@@ -236,17 +237,17 @@ uint64_t cmp_ecdsa_online_signing_service::mta_verify(const std::string& txid, c
         auto it = mta_responses.find(*i);
         if (it == mta_responses.end())
         {
-            LOG_ERROR("missing mta response from player %lu", *i);
+            LOG_ERROR("missing mta response from player %" PRIu64, *i);
             throw cosigner_exception(cosigner_exception::INVALID_PARAMETERS);
         }
         if (it->first != my_id && it->second.response.size() != metadata.sig_data.size())
         {
-            LOG_ERROR("got %lu mta responses from player %lu, but the request is for %lu presigning data", it->second.response.size(), *i, metadata.sig_data.size());
+            LOG_ERROR("got %lu mta responses from player %" PRIu64 ", but the request is for %lu presigning data", it->second.response.size(), *i, metadata.sig_data.size());
             throw cosigner_exception(cosigner_exception::INVALID_PARAMETERS);
         }
         if (memcmp(it->second.ack, metadata.ack, sizeof(commitments_sha256_t)) != 0)
         {
-            LOG_ERROR("got wrong ack from player %lu", *i);
+            LOG_ERROR("got wrong ack from player %" PRIu64, *i);
             throw cosigner_exception(cosigner_exception::INVALID_PARAMETERS);
         }
     }
@@ -308,12 +309,12 @@ uint64_t cmp_ecdsa_online_signing_service::get_si(const std::string& txid, const
         auto it = deltas.find(*i);
         if (it == deltas.end())
         {
-            LOG_ERROR("missing delta from player %lu", *i);
+            LOG_ERROR("missing delta from player %" PRIu64, *i);
             throw cosigner_exception(cosigner_exception::INVALID_PARAMETERS);
         }
         if (it->second.size() != metadata.sig_data.size())
         {
-            LOG_ERROR("got %lu delta from player %lu, but the request is for %lu presigning data", it->second.size(), *i, metadata.sig_data.size());
+            LOG_ERROR("got %lu delta from player %" PRIu64 ", but the request is for %lu presigning data", it->second.size(), *i, metadata.sig_data.size());
             throw cosigner_exception(cosigner_exception::INVALID_PARAMETERS);
         }
     }
@@ -409,12 +410,12 @@ uint64_t cmp_ecdsa_online_signing_service::get_cmp_signature(const std::string& 
         auto it = s.find(*i);
         if (it == s.end())
         {
-            LOG_ERROR("s from player %lu missing", *i);
+            LOG_ERROR("s from player %" PRIu64 " missing", *i);
             throw cosigner_exception(cosigner_exception::INVALID_PARAMETERS);
         }
         if (it->second.size() != metadata.sig_data.size())
         {
-            LOG_ERROR("number of s (%lu) from player %lu is different from block size %lu", it->second.size(), *i, metadata.sig_data.size());
+            LOG_ERROR("number of s (%lu) from player %" PRIu64 " is different from block size %lu", it->second.size(), *i, metadata.sig_data.size());
             throw cosigner_exception(cosigner_exception::INVALID_PARAMETERS);
         }
     }
@@ -466,18 +467,15 @@ uint64_t cmp_ecdsa_online_signing_service::get_cmp_signature(const std::string& 
 
     _signing_persistency.delete_signing_data(txid);
 
-    std::lock_guard<std::mutex> time_lock(_timing_map_lock);
-    auto timing_it = _timing_map.find(txid);
-    if (timing_it == _timing_map.end())
+    const std::optional<const uint64_t> diff = _timing_map.extract(txid);
+    if (!diff)
     {
         LOG_WARN("transaction %s is missing from timing map??", txid.c_str());
         LOG_INFO("Finished signing transaction %s", txid.c_str());
     }
     else
     {
-        uint64_t diff = (clock() - timing_it->second);
-        _timing_map.erase(timing_it);
-        LOG_INFO("Finished signing %lu blocks for transaction %s (tenanat %s) in %lums", full_sig.size(), txid.c_str(), _service.get_current_tenantid().c_str(), diff);
+        LOG_INFO("Finished signing %lu blocks for transaction %s (tenant %s) in %" PRIu64 "ms", full_sig.size(), txid.c_str(), _service.get_current_tenantid().c_str(), *diff);
     }
 
     return my_id;

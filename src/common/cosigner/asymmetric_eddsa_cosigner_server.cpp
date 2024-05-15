@@ -8,7 +8,7 @@
 
 #include <openssl/sha.h>
 
-extern "C" int gettimeofday(struct timeval *tv, struct timezone *tz);
+#include <inttypes.h>
 
 namespace fireblocks
 {
@@ -16,13 +16,6 @@ namespace common
 {
 namespace cosigner
 {
-
-static uint64_t clock()
-{
-    timeval tv;
-	gettimeofday(&tv, NULL);
-    return (uint64_t)tv.tv_sec * 1000 + (uint64_t)tv.tv_usec / 1000;
-}
 
 class ed25519_scalar_cleaner
 {
@@ -35,7 +28,7 @@ private:
 
 
 asymmetric_eddsa_cosigner_server::asymmetric_eddsa_cosigner_server(platform_service& cosigner_service, const cmp_key_persistency& key_persistency, signing_persistency& signing_persistency) :
-    asymmetric_eddsa_cosigner(cosigner_service, key_persistency), _signing_persistency(signing_persistency) {}
+    asymmetric_eddsa_cosigner(cosigner_service, key_persistency), _signing_persistency(signing_persistency), _timing_map(cosigner_service) {}
 
 void asymmetric_eddsa_cosigner_server::store_presigning_data(const std::string& key_id, const std::string& request_id, uint32_t start_index, uint32_t count, uint32_t total_count, const std::set<uint64_t>& players_ids,
     uint64_t sender, const std::vector<eddsa_commitment>& R_commitments)
@@ -66,7 +59,7 @@ void asymmetric_eddsa_cosigner_server::store_presigning_data(const std::string& 
 
     if (!_service.is_client_id(sender))
     {
-        LOG_ERROR("client id %lu is not an mobile device", sender);
+        LOG_ERROR("client id %" PRIu64 " is not an mobile device", sender);
         throw cosigner_exception(cosigner_exception::INVALID_PARAMETERS);
     }
 
@@ -74,13 +67,13 @@ void asymmetric_eddsa_cosigner_server::store_presigning_data(const std::string& 
     {
         if (metadata.players_info.find(*i) == metadata.players_info.end())
         {
-            LOG_ERROR("Player %lu is not part of key %s", *i, key_id.c_str());
+            LOG_ERROR("Player %" PRIu64 " is not part of key %s", *i, key_id.c_str());
             throw cosigner_exception(cosigner_exception::INVALID_PARAMETERS);
         }
 
         if (*i != sender && _service.is_client_id(*i))
         {
-            LOG_ERROR("Key %s was created with more then one client device %lu, and sender %lu", key_id.c_str(), *i, sender);
+            LOG_ERROR("Key %s was created with more then one client device %" PRIu64 ", and sender %" PRIu64, key_id.c_str(), *i, sender);
             throw cosigner_exception(cosigner_exception::INVALID_PARAMETERS);
         }
     }
@@ -123,7 +116,7 @@ void asymmetric_eddsa_cosigner_server::eddsa_sign_offline(const std::string& key
     {
         if (metadata.players_info.find(*i) == metadata.players_info.end())
         {
-            LOG_ERROR("playerid %lu not part of key, for keyid = %s, txid = %s", *i, key_id.c_str(), txid.c_str());
+            LOG_ERROR("playerid %" PRIu64 " not part of key, for keyid = %s, txid = %s", *i, key_id.c_str(), txid.c_str());
             throw cosigner_exception(cosigner_exception::INVALID_PARAMETERS);
         }
     }
@@ -136,11 +129,8 @@ void asymmetric_eddsa_cosigner_server::eddsa_sign_offline(const std::string& key
         throw cosigner_exception(cosigner_exception::INVALID_PARAMETERS);
     }
 
-    {
-        std::lock_guard<std::mutex> lg(_timing_map_lock);
-        _timing_map[txid] = clock();
-    }
-    
+    _timing_map.insert(txid);
+
     uint64_t my_id = _service.get_id_from_keyid(key_id);
 
     LOG_INFO("Starting signing process keyid = %s, txid = %s", key_id.c_str(), txid.c_str());
@@ -228,7 +218,7 @@ uint64_t asymmetric_eddsa_cosigner_server::decommit_r(const std::string& txid, c
     {
         if (!_service.is_client_id(*i) && commitments.find(*i) == commitments.end())
         {
-            LOG_ERROR("commitment for player %lu not found in commitments list", *i);
+            LOG_ERROR("commitment for player %" PRIu64 " not found in commitments list", *i);
             throw cosigner_exception(cosigner_exception::INVALID_PARAMETERS);
         }
     }
@@ -236,7 +226,7 @@ uint64_t asymmetric_eddsa_cosigner_server::decommit_r(const std::string& txid, c
     {
         if (i->second.size() != data.sig_data.size())
         {
-            LOG_ERROR("commitment for player %lu size %lu is different from block size %lu", i->first, i->second.size(), data.sig_data.size());
+            LOG_ERROR("commitment for player %" PRIu64 " size %lu is different from block size %lu", i->first, i->second.size(), data.sig_data.size());
             throw cosigner_exception(cosigner_exception::INVALID_PARAMETERS);
         }
     }
@@ -280,7 +270,7 @@ uint64_t asymmetric_eddsa_cosigner_server::broadcast_r(const std::string& txid, 
             send_to = *i;
         else if (players_R.find(*i) == players_R.end())
         {
-            LOG_ERROR("Rs for player %lu not found in Rs list", *i);
+            LOG_ERROR("Rs for player %" PRIu64 " not found in Rs list", *i);
             throw cosigner_exception(cosigner_exception::INVALID_PARAMETERS);
         }
     }
@@ -288,7 +278,7 @@ uint64_t asymmetric_eddsa_cosigner_server::broadcast_r(const std::string& txid, 
     {
         if (i->second.size() != data.sig_data.size())
         {
-            LOG_ERROR("Rs for player %lu size %lu is different from block size %lu", i->first, i->second.size(), data.sig_data.size());
+            LOG_ERROR("Rs for player %" PRIu64 " size %lu is different from block size %lu", i->first, i->second.size(), data.sig_data.size());
             throw cosigner_exception(cosigner_exception::INVALID_PARAMETERS);
         }
     }
@@ -300,7 +290,7 @@ uint64_t asymmetric_eddsa_cosigner_server::broadcast_r(const std::string& txid, 
         auto it = players_R.find(i->first);
         if (it == players_R.end())
         {
-            LOG_ERROR("R from player %lu missing", i->first);
+            LOG_ERROR("R from player %" PRIu64 " missing", i->first);
             throw cosigner_exception(cosigner_exception::INVALID_PARAMETERS);
         }
 
@@ -308,7 +298,7 @@ uint64_t asymmetric_eddsa_cosigner_server::broadcast_r(const std::string& txid, 
         {
             if (!verify_commit_to_r(i->second[j], txid, j + data.start_index, i->first, it->second[j].data))
             {
-                LOG_ERROR("Failed to verify commitment from player %lu to block %lu", i->first, j);
+                LOG_ERROR("Failed to verify commitment from player %" PRIu64 " to block %lu", i->first, j);
                 throw cosigner_exception(cosigner_exception::INVALID_PARAMETERS);
             }
 
@@ -342,13 +332,13 @@ uint64_t asymmetric_eddsa_cosigner_server::broadcast_si(const std::string& txid,
 
     if (data.signers_ids.find(sender) == data.signers_ids.end())
     {
-        LOG_ERROR("player %lu is not part of signers list", sender);
+        LOG_ERROR("player %" PRIu64 " is not part of signers list", sender);
         throw cosigner_exception(cosigner_exception::INVALID_PARAMETERS);
     }
 
     if (partial_sigs.size() != data.sig_data.size())
     {
-        LOG_ERROR("partial sigs from player %lu size %lu is different from block size %lu", sender, partial_sigs.size(), data.sig_data.size());
+        LOG_ERROR("partial sigs from player %" PRIu64 " size %lu is different from block size %lu", sender, partial_sigs.size(), data.sig_data.size());
         throw cosigner_exception(cosigner_exception::INVALID_PARAMETERS);
     }
     ed25519_algebra_ctx_t* ed25519 = (ed25519_algebra_ctx_t*)_ctx->ctx;
@@ -359,7 +349,7 @@ uint64_t asymmetric_eddsa_cosigner_server::broadcast_si(const std::string& txid,
     auto sender_info = metadata.players_info.find(sender);
     if (sender_info == metadata.players_info.end())
     {
-        LOG_ERROR("player %lu is not part of key %s", sender, data.key_id.c_str());
+        LOG_ERROR("player %" PRIu64 " is not part of key %s", sender, data.key_id.c_str());
         assert(0);
         throw cosigner_exception(cosigner_exception::INTERNAL_ERROR);
     }
@@ -380,7 +370,7 @@ uint64_t asymmetric_eddsa_cosigner_server::broadcast_si(const std::string& txid,
     uint64_t min_signer_id = *send_to.begin();
     if (my_id == min_signer_id)
     {
-        LOG_INFO("My id %lu is the min id, will add client s to my s", my_id);
+        LOG_INFO("My id %" PRIu64 " is the min id, will add client s to my s", my_id);
     }
 
     sigs.reserve(data.sig_data.size());
@@ -390,7 +380,7 @@ uint64_t asymmetric_eddsa_cosigner_server::broadcast_si(const std::string& txid,
         _signing_persistency.load_preprocessed_data(data.key_id, data.start_index + i, commitment);
         if (!verify_commit_to_r(commitment, data.key_id, i + data.start_index, sender, partial_sigs[i].R))
         {
-            LOG_ERROR("Failed to verify commitment from player %lu to block %lu", sender, i);
+            LOG_ERROR("Failed to verify commitment from player %" PRIu64 " to block %lu", sender, i);
             throw cosigner_exception(cosigner_exception::INVALID_PARAMETERS);
         }
         eddsa_signature sig;
@@ -403,7 +393,7 @@ uint64_t asymmetric_eddsa_cosigner_server::broadcast_si(const std::string& txid,
         throw_cosigner_exception(ed25519_calc_hram(ed25519, &hram, &sig.R, &derived_public_key, (const uint8_t*)data.sig_data[i].message.data(), data.sig_data[i].message.size(), data.sig_data[i].flags & EDDSA_KECCAK));
         if (!verify_client_s(partial_sigs[i].R, partial_sigs[i].s, hram, sender_info->second.public_share, delta))
         {
-            LOG_ERROR("Failed to verify the signature s sent by client %lu for block %lu txid %s", sender, i, txid.c_str());
+            LOG_ERROR("Failed to verify the signature s sent by client %" PRIu64 " for block %lu txid %s", sender, i, txid.c_str());
             throw cosigner_exception(cosigner_exception::INVALID_PARAMETERS);
         }
         ed25519_scalar_t x;
@@ -447,18 +437,15 @@ uint64_t asymmetric_eddsa_cosigner_server::broadcast_si(const std::string& txid,
     {
         _signing_persistency.delete_signing_data(txid);
 
-        std::lock_guard<std::mutex> time_lock(_timing_map_lock);
-        auto timing_it = _timing_map.find(txid);
-        if (timing_it == _timing_map.end())
+        const std::optional<const uint64_t> diff = _timing_map.extract(txid);
+        if (!diff)
         {
             LOG_WARN("transaction %s is missing from timing map??", txid.c_str());
-            LOG_INFO("Finished signing trnsaction %s", txid.c_str());
+            LOG_INFO("Finished signing transaction %s", txid.c_str());
         }
         else
         {
-            uint64_t diff = (clock() - timing_it->second);
-            _timing_map.erase(timing_it);
-            LOG_INFO("Finished signing %lu blocks for transaction %s (tenanat %s) in %lums", data.signers_ids.size(), txid.c_str(), _service.get_current_tenantid().c_str(), diff);
+            LOG_INFO("Finished signing %lu blocks for transaction %s (tenant %s) in %" PRIu64 "ms", data.signers_ids.size(), txid.c_str(), _service.get_current_tenantid().c_str(), *diff);
         }
     }
     else
@@ -490,12 +477,12 @@ uint64_t asymmetric_eddsa_cosigner_server::get_eddsa_signature(const std::string
             continue;
         if (it == partial_sigs.end())
         {
-            LOG_ERROR("partial sig for player %lu not found in Rs list", *i);
+            LOG_ERROR("partial sig for player %" PRIu64 " not found in Rs list", *i);
             throw cosigner_exception(cosigner_exception::INVALID_PARAMETERS);
         }
         if (it->second.size() != data.sig_data.size())
         {
-            LOG_ERROR("number of s (%lu) from player %lu is different from block size %lu", it->second.size(), *i, data.sig_data.size());
+            LOG_ERROR("number of s (%lu) from player %" PRIu64 " is different from block size %lu", it->second.size(), *i, data.sig_data.size());
             throw cosigner_exception(cosigner_exception::INVALID_PARAMETERS);
         }
     }
@@ -514,7 +501,7 @@ uint64_t asymmetric_eddsa_cosigner_server::get_eddsa_signature(const std::string
         {
             if (memcmp(cur_sig.R, i->second[index].R, sizeof(ed25519_point_t)) != 0)
             {
-                LOG_ERROR("R from player %lu is different from stored R", i->first);
+                LOG_ERROR("R from player %" PRIu64 " is different from stored R", i->first);
                 throw cosigner_exception(cosigner_exception::INVALID_PARAMETERS);
             }
             ed25519_le_scalar_t s;
@@ -548,18 +535,15 @@ uint64_t asymmetric_eddsa_cosigner_server::get_eddsa_signature(const std::string
 
     _signing_persistency.delete_signing_data(txid);
 
-    std::lock_guard<std::mutex> time_lock(_timing_map_lock);
-    auto timing_it = _timing_map.find(txid);
-    if (timing_it == _timing_map.end())
+    const std::optional<const uint64_t> diff = _timing_map.extract(txid);
+    if (!diff)
     {
         LOG_WARN("transaction %s is missing from timing map??", txid.c_str());
-        LOG_INFO("Finished signing trnsaction %s", txid.c_str());
+        LOG_INFO("Finished signing transaction %s", txid.c_str());
     }
     else
     {
-        uint64_t diff = (clock() - timing_it->second);
-        _timing_map.erase(timing_it);
-        LOG_INFO("Finished signing %lu blocks for transaction %s (tenanat %s) in %lums", sigs.size(), txid.c_str(), _service.get_current_tenantid().c_str(), diff);
+        LOG_INFO("Finished signing %lu blocks for transaction %s (tenant %s) in %" PRIu64 "ms", sigs.size(), txid.c_str(), _service.get_current_tenantid().c_str(), *diff);
     }
 
     return my_id;

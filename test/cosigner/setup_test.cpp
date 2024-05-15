@@ -1,3 +1,4 @@
+#include <chrono>
 #include <iostream>
 #include <tests/catch.hpp>
 
@@ -69,7 +70,7 @@ void setup_persistency::load_key_metadata(const std::string& key_id, cmp_key_met
     auto it = _keys.find(key_id);
     if (it == _keys.end())
         throw cosigner_exception(cosigner_exception::BAD_KEY);
-    metadata = it->second.metadata;
+    metadata = it->second.metadata.value();
 }
 
 void setup_persistency::load_auxiliary_keys(const std::string& key_id, auxiliary_keys& aux) const
@@ -87,9 +88,12 @@ void setup_persistency::store_key(const std::string& key_id, cosigner_sign_algor
     info.algorithm = algorithm;
 }
 
-void setup_persistency::store_key_metadata(const std::string& key_id, const cmp_key_metadata& metadata)
+void setup_persistency::store_key_metadata(const std::string& key_id, const cmp_key_metadata& metadata, bool allow_override)
 {
     auto& info = _keys[key_id];
+    if (!allow_override && info.metadata)
+        throw cosigner_exception(cosigner_exception::INTERNAL_ERROR);
+
     info.metadata = metadata;
 }
 
@@ -113,6 +117,9 @@ void setup_persistency::load_setup_data(const std::string& key_id, setup_data& m
 
 void setup_persistency::store_setup_commitments(const std::string& key_id, const std::map<uint64_t, commitment>& commitments)
 {
+    if (_commitments.find(key_id) != _commitments.end())
+        throw cosigner_exception(cosigner_exception::INTERNAL_ERROR);
+
     _commitments[key_id] = commitments;
 }
 
@@ -139,6 +146,8 @@ private:
         RAND_bytes(random_data, len);
     }
 
+    uint64_t now_msec() const override { return std::chrono::time_point_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()).time_since_epoch().count(); }
+
     const std::string get_current_tenantid() const {return TENANT_ID;}
     uint64_t get_id_from_keyid(const std::string& key_id) const {return _id;}
     void derive_initial_share(const share_derivation_args& derive_from, cosigner_sign_algorithm algorithm, elliptic_curve256_scalar_t* key) const {assert(0);}
@@ -163,10 +172,10 @@ void create_secret(players_setup_info& players, cosigner_sign_algorithm type, co
 {
     std::unique_ptr<elliptic_curve256_algebra_ctx_t, void(*)(elliptic_curve256_algebra_ctx_t*)> algebra(create_algebra(type), elliptic_curve256_algebra_ctx_free);
     const size_t PUBKEY_SIZE = algebra->point_size(algebra.get());
+    memset(pubkey, 0, sizeof(elliptic_curve256_point_t));
 
     std::cout << "keyid = " << keyid << std::endl;
     std::vector<uint64_t> players_ids;
-
 
     std::map<uint64_t, std::unique_ptr<setup_info>> services;
     for (auto i = players.begin(); i != players.end(); ++i)
@@ -178,8 +187,11 @@ void create_secret(players_setup_info& players, cosigner_sign_algorithm type, co
     std::map<uint64_t, commitment> commitments;
     for (auto i = services.begin(); i != services.end(); ++i)
     {
-        commitment& commitment = commitments[i->first];
-        REQUIRE_NOTHROW(i->second->setup_service.generate_setup_commitments(keyid, TENANT_ID, type, players_ids, players_ids.size(), 0, {}, commitment));
+        commitment& commit = commitments[i->first];
+        REQUIRE_NOTHROW(i->second->setup_service.generate_setup_commitments(keyid, TENANT_ID, type, players_ids, players_ids.size(), 0, {}, commit));
+
+        commitment repeat_commit;
+        REQUIRE_THROWS_AS(i->second->setup_service.generate_setup_commitments(keyid, TENANT_ID, type, players_ids, players_ids.size(), 0, {}, repeat_commit), cosigner_exception);
     }
 
     std::map<uint64_t, setup_decommitment> decommitments;
@@ -187,6 +199,9 @@ void create_secret(players_setup_info& players, cosigner_sign_algorithm type, co
     {
         setup_decommitment& decommitment = decommitments[i->first];
         REQUIRE_NOTHROW(i->second->setup_service.store_setup_commitments(keyid, commitments, decommitment));
+
+        setup_decommitment repeat_decommitment;
+        REQUIRE_THROWS_AS(i->second->setup_service.store_setup_commitments(keyid, commitments, repeat_decommitment), cosigner_exception);
     }
     commitments.clear();
 
@@ -194,6 +209,9 @@ void create_secret(players_setup_info& players, cosigner_sign_algorithm type, co
     for (auto i = services.begin(); i != services.end(); ++i)
     {
         setup_zk_proofs& proof = proofs[i->first];
+        REQUIRE_NOTHROW(i->second->setup_service.generate_setup_proofs(keyid, decommitments, proof));
+
+        // Multiple decommitments are fine
         REQUIRE_NOTHROW(i->second->setup_service.generate_setup_proofs(keyid, decommitments, proof));
     }
     decommitments.clear();
@@ -203,6 +221,9 @@ void create_secret(players_setup_info& players, cosigner_sign_algorithm type, co
     {
         auto& proof = paillier_large_factor_proofs[i->first];
         REQUIRE_NOTHROW(i->second->setup_service.verify_setup_proofs(keyid, proofs, proof));
+
+        std::map<uint64_t, byte_vector_t> repeat_proof;
+        REQUIRE_NOTHROW(i->second->setup_service.verify_setup_proofs(keyid, proofs, repeat_proof));
     }
     proofs.clear();
     
@@ -223,6 +244,10 @@ void create_secret(players_setup_info& players, cosigner_sign_algorithm type, co
         {
             REQUIRE(memcmp(pubkey, public_key.data(), PUBKEY_SIZE) == 0);
         }
+
+        std::string repeat_public_key;
+        cosigner_sign_algorithm repeat_algorithm;
+        REQUIRE_NOTHROW(i->second->setup_service.create_secret(keyid, paillier_large_factor_proofs, repeat_public_key, repeat_algorithm));
     }
     paillier_large_factor_proofs.clear();
     

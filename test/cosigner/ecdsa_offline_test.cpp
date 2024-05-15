@@ -51,6 +51,8 @@ private:
         RAND_bytes(random_data, len);
     }
 
+    uint64_t now_msec() const override { return std::chrono::time_point_cast<std::chrono::milliseconds>(Clock::now()).time_since_epoch().count(); }
+
     const std::string get_current_tenantid() const {return TENANT_ID;}
     uint64_t get_id_from_keyid(const std::string& key_id) const {return _id;}
     void derive_initial_share(const share_derivation_args& derive_from, cosigner_sign_algorithm algorithm, elliptic_curve256_scalar_t* key) const {assert(0);}
@@ -284,6 +286,9 @@ static void ecdsa_preprocess(std::map<uint64_t, std::unique_ptr<offline_siging_i
     {
         auto& mta_request = mta_requests[i->first];
         REQUIRE_NOTHROW(i->second->signing_service.start_ecdsa_signature_preprocessing(TENANT_ID, keyid, request, start, count, total, players_ids, mta_request));
+
+        std::vector<cmp_mta_request> repeat_mta_requests;
+        REQUIRE_THROWS_AS(i->second->signing_service.start_ecdsa_signature_preprocessing(TENANT_ID, keyid, request, start, count, total, players_ids, repeat_mta_requests), cosigner_exception);
     }
 
     std::map<uint64_t, cmp_mta_responses> mta_responses;
@@ -291,6 +296,9 @@ static void ecdsa_preprocess(std::map<uint64_t, std::unique_ptr<offline_siging_i
     {
         auto& response = mta_responses[i->first];
         REQUIRE_NOTHROW(i->second->signing_service.offline_mta_response(request, mta_requests, response));
+
+        cmp_mta_responses repeat_response;
+        REQUIRE_THROWS_AS(i->second->signing_service.offline_mta_response(request, mta_requests, repeat_response), cosigner_exception);
     }
     mta_requests.clear();
 
@@ -299,6 +307,9 @@ static void ecdsa_preprocess(std::map<uint64_t, std::unique_ptr<offline_siging_i
     {
         auto& delta = deltas[i->first];
         REQUIRE_NOTHROW(i->second->signing_service.offline_mta_verify(request, mta_responses, delta));
+
+        std::vector<cmp_mta_deltas> repeat_deltas;
+        REQUIRE_THROWS_AS(i->second->signing_service.offline_mta_verify(request, mta_responses, repeat_deltas), cosigner_exception);
     }
     mta_responses.clear();
 
@@ -309,6 +320,9 @@ static void ecdsa_preprocess(std::map<uint64_t, std::unique_ptr<offline_siging_i
         std::string key_id;
         REQUIRE_NOTHROW(i->second->signing_service.store_presigning_data(request, deltas, key_id));
         REQUIRE(key_id == keyid);
+
+        std::string repeat_key_id;
+        REQUIRE_THROWS_AS(i->second->signing_service.store_presigning_data(request, deltas, repeat_key_id), cosigner_exception);
     }
 }
 
@@ -347,6 +361,9 @@ static void ecdsa_sign(std::map<uint64_t, std::unique_ptr<offline_siging_info>>&
         auto& sigs = partial_sigs[i->first];
         std::string key_id;
         REQUIRE_NOTHROW(i->second->signing_service.ecdsa_sign(keyid, txid, data, "", players_str, players_ids, start_index, sigs));
+
+        std::vector<recoverable_signature> repeat_sigs;
+        REQUIRE_THROWS_AS(i->second->signing_service.ecdsa_sign(keyid, txid, data, "", players_str, players_ids, start_index, repeat_sigs), cosigner_exception);
     }
 
     std::vector<recoverable_signature> sigs;
