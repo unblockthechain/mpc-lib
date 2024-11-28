@@ -2,10 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <openssl/sha.h>
-
-#ifndef ENCLAVE
-#define memset_s(dest, destsz, ch, count) memset(dest, ch, count)
-#endif
+#include <openssl/crypto.h>
 
 struct drng
 {
@@ -36,7 +33,7 @@ void drng_free(drng_t *rng)
 {
     if (rng)
     {
-        memset_s(rng, sizeof(drng_t), 0, sizeof(drng_t));
+        OPENSSL_cleanse(rng, sizeof(drng_t));
         free(rng);
     }
 }
@@ -46,14 +43,14 @@ drng_status drng_read_deterministic_rand(drng_t *rng, uint8_t *rand, uint32_t le
     if (!rng || !rand || !length_in_bytes)
         return DRNG_INVALID_PARAMETER;
     
-    while (length_in_bytes + rng->pos > SHA512_DIGEST_LENGTH / 2)
+    while (length_in_bytes > sizeof(rng->data) - rng->pos)
     {
-        uint8_t size = SHA512_DIGEST_LENGTH / 2 - rng->pos;
+        uint8_t size = sizeof(rng->data) - rng->pos;
         memcpy(rand, rng->data + rng->pos, size);
         rand += size;
         length_in_bytes -= size;
         rng->pos = 0;
-        SHA512(rng->seed, SHA512_DIGEST_LENGTH / 2, rng->data);
+        SHA512(rng->seed, sizeof(rng->seed), rng->data);
     }
     memcpy(rand, rng->data + rng->pos, length_in_bytes);
     rng->pos += length_in_bytes;
