@@ -1,9 +1,11 @@
 #pragma once
 
+#include "cosigner_export.h"
+
 #include "cosigner/types.h"
 #include "cosigner/cosigner_exception.h"
-
 #include "crypto/paillier/paillier.h"
+
 #include <openssl/crypto.h>
 
 #include <map>
@@ -18,7 +20,7 @@ namespace cosigner
 
 namespace mta
 {
-    class response_verifier;
+    class base_response_verifier;
 }
 
 class cmp_key_persistency;
@@ -88,18 +90,18 @@ struct ecdsa_signing_data
 };
 
 // this class holds the common functionality for cmp_ecdsa_online_signing_service and cmp_ecdsa_offline_signing_service
-class cmp_ecdsa_signing_service
+class COSIGNER_EXPORT cmp_ecdsa_signing_service
 {
 protected:
     cmp_ecdsa_signing_service(platform_service& service, const cmp_key_persistency& key_persistency) : _service(service), _key_persistency(key_persistency) {}
-    virtual ~cmp_ecdsa_signing_service() {}
+    virtual ~cmp_ecdsa_signing_service();
 
     static cmp_mta_request create_mta_request(ecdsa_signing_data& data, const elliptic_curve256_algebra_ctx_t* algebra, uint64_t my_id, const std::vector<uint8_t>& aad, const cmp_key_metadata& metadata, const std::shared_ptr<paillier_public_key_t>& paillier);
     static void ack_mta_request(uint32_t count, const std::map<uint64_t, std::vector<cmp_mta_request>>& requests, const std::set<uint64_t>& player_ids, commitments_sha256_t& ack);
     static cmp_mta_response create_mta_response(ecdsa_signing_data& data, const elliptic_curve256_algebra_ctx_t* algebra, uint64_t my_id, const std::vector<uint8_t>& aad, const cmp_key_metadata& metadata,
         const std::map<uint64_t, std::vector<cmp_mta_request>>& requests, size_t index, const elliptic_curve_scalar& key, const auxiliary_keys& aux_keys);
     static cmp_mta_deltas mta_verify(ecdsa_signing_data& data, const elliptic_curve256_algebra_ctx_t* algebra, uint64_t my_id, const std::string& uuid, const std::vector<uint8_t>& aad, const cmp_key_metadata& metadata,
-        const std::map<uint64_t, cmp_mta_responses>& mta_responses, size_t index, const auxiliary_keys& aux_keys, std::map<uint64_t, mta::response_verifier>& verifers);
+        const std::map<uint64_t, cmp_mta_responses>& mta_responses, size_t index, const auxiliary_keys& aux_keys, std::map<uint64_t, std::unique_ptr<mta::base_response_verifier>>& verifiers);
     static void calc_R(ecdsa_signing_data& data, elliptic_curve_point& R, const elliptic_curve256_algebra_ctx_t* algebra, uint64_t my_id, const std::string& uuid, const cmp_key_metadata& metadata,
         const std::map<uint64_t, std::vector<cmp_mta_deltas>>& deltas, size_t index);
 

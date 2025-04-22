@@ -84,7 +84,8 @@ GFp_curve_algebra_ctx_t *stark_algebra_ctx_new()
     GFp_curve_algebra_ctx_t *algebra = malloc(sizeof(GFp_curve_algebra_ctx_t));
     if (!algebra)
         return NULL;
-
+    algebra->curve = NULL;
+    
     ctx = BN_CTX_new();
     if (!ctx)
         goto cleanup;
@@ -343,10 +344,10 @@ elliptic_curve_algebra_status GFp_curve_algebra_verify_linear_combination(const 
     }
 
     zero = BN_CTX_get(bn_ctx);
-    BN_zero(zero);
     tmp = EC_POINT_new(ctx->curve);
     if (!zero || !tmp)
         goto cleanup;
+    BN_zero(zero);
     if (!EC_POINTs_mul(ctx->curve, tmp, zero, points_count, (const EC_POINT**)points, (const BIGNUM**)coeff, bn_ctx))
     {
         status = ELLIPTIC_CURVE_ALGEBRA_UNKNOWN_ERROR;
@@ -1052,7 +1053,7 @@ static elliptic_curve_algebra_status ec_reduce_stark(const struct elliptic_curve
     }
     else
         ret = ELLIPTIC_CURVE_ALGEBRA_INVALID_SCALAR;
-    memset(tmp, 0, sizeof(elliptic_curve256_scalar_t));
+    OPENSSL_cleanse(tmp, sizeof(elliptic_curve256_scalar_t));
     return ret;
 }
 
